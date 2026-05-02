@@ -4,7 +4,6 @@ import pdfplumber
 import io
 from weasyprint import HTML
 from datetime import datetime
-import time
 
 st.set_page_config(page_title="STMNT Processor", layout="wide")
 
@@ -29,7 +28,6 @@ uploaded_file = st.file_uploader("Upload Bank Statement (PDF)", type=['pdf'])
 
 def extract_pdf_data(file):
     all_data = []
-    # Visual feedback for processing
     with st.spinner("🔍 Accessing PDF layers..."):
         with pdfplumber.open(file) as pdf:
             total_pages = len(pdf.pages)
@@ -37,7 +35,6 @@ def extract_pdf_data(file):
             status_text = st.empty()
             
             for i, page in enumerate(pdf.pages):
-                # Update progress indicators
                 current_progress = (i + 1) / total_pages
                 progress_bar.progress(current_progress)
                 status_text.text(f"Processing page {i+1} of {total_pages}...")
@@ -46,14 +43,12 @@ def extract_pdf_data(file):
                 if table:
                     all_data.extend(table)
             
-            # Clean up progress indicators
             progress_bar.empty()
             status_text.empty()
             
     if not all_data:
         return pd.DataFrame()
     
-    # Use first row as headers and clean them
     df = pd.DataFrame(all_data[1:], columns=all_data[0])
     df.columns = [str(c).replace('\n', ' ').strip() if c else f"Column_{i}" for i, c in enumerate(df.columns)]
     return df
@@ -85,7 +80,6 @@ def generate_output_pdf(df):
     return HTML(string=html_content).write_pdf()
 
 if uploaded_file:
-    # Use session state to cache data so switching apps doesn't trigger a re-parse immediately
     if 'raw_df' not in st.session_state:
         st.session_state.raw_df = extract_pdf_data(uploaded_file)
     
@@ -94,7 +88,7 @@ if uploaded_file:
     if not df.empty:
         st.sidebar.header("🎯 Filter Panel")
         
-        # 1. Date Filter (Fuzzy Search)
+        # 1. Date Filter
         date_col = next((c for c in df.columns if 'date' in c.lower()), None)
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
@@ -111,7 +105,7 @@ if uploaded_file:
             if sel_branches:
                 df = df[df[branch_col].isin(sel_branches)]
 
-        # 3. Transaction Type (Dr/Cr)
+        # 3. Transaction Type
         type_col = next((c for c in df.columns if any(x in c.lower() for x in ['type', 'dr/cr', 'status'])), None)
         if type_col:
             types = sorted(df[type_col].unique().tolist())
@@ -133,7 +127,8 @@ if uploaded_file:
             df = df[df.apply(lambda row: row.astype(str).str.contains(search, case=False).any(), axis=1)]
 
         st.subheader(f"📊 {len(df)} transactions isolated")
-        st.dataframe(df, use_container_width=True)
+        # FIXED: Using width="stretch" per 2026 deprecation rules
+        st.dataframe(df, width="stretch")
         
         if st.button("🚀 Export Filtered Results (PDF)"):
             with st.spinner("Generating PDF..."):
@@ -142,6 +137,5 @@ if uploaded_file:
     else:
         st.error("Table data extraction failed.")
 else:
-    # Clear cache if no file is present
     if 'raw_df' in st.session_state:
         del st.session_state.raw_df
