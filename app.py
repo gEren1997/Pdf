@@ -8,12 +8,24 @@ import re
 
 st.set_page_config(page_title="STMNT Processor Pro", layout="wide")
 
-# Custom UI Styling
+# High-Contrast UI Styling for Visibility
 st.markdown("""
     <style>
-    .main { background-color: #f1f5f9; }
-    .stDataFrame { border: 1px solid #e2e8f0; border-radius: 8px; background: white; }
-    [data-testid="stSidebar"] { background-color: #0f172a; color: white; }
+    .main { background-color: #f8fafc; }
+    /* Sidebar Styling: Navy Background with White Text */
+    [data-testid="stSidebar"] {
+        background-color: #1e293b !important;
+        color: white !important;
+    }
+    /* Ensure all text in sidebar is white */
+    [data-testid="stSidebar"] p, [data-testid="stSidebar"] label, [data-testid="stSidebar"] span {
+        color: white !important;
+    }
+    /* Input box styling for visibility */
+    .stTextInput input, .stNumberInput input {
+        background-color: #f1f5f9 !important;
+        color: #0f172a !important;
+    }
     .stButton>button { width: 100%; background-color: #1e3a8a; color: white; border-radius: 8px; }
     h1 { color: #1e3a8a; }
     </style>
@@ -34,7 +46,6 @@ def extract_pdf_data(file):
                 table = page.extract_table()
                 if table: all_data.extend(table)
             progress_bar.empty()
-            
     if not all_data: return pd.DataFrame()
     df = pd.DataFrame(all_data[1:], columns=all_data[0])
     df.columns = [str(c).replace('\n', ' ').strip() if c else f"Column_{i}" for i, c in enumerate(df.columns)]
@@ -54,14 +65,12 @@ def generate_output_pdf(df, total_dr, total_cr):
             .report-table th {{ background-color: #1e3a8a; color: white; padding: 6px; text-align: left; }}
             .report-table td {{ border-bottom: 1px solid #cbd5e1; padding: 6px; }}
             tr:nth-child(even) {{ background-color: #f1f5f9; }}
-            .total-row {{ font-weight: bold; color: #1e3a8a; }}
         </style>
     </head>
     <body>
         <h2>Transaction Separation Report</h2>
-        
         <div class="summary-box">
-            <table style="width: 100%; border: none;">
+            <table style="width: 100%;">
                 <tr>
                     <td><strong>Total Debit:</strong> {total_dr:,.2f}</td>
                     <td><strong>Total Credit:</strong> {total_cr:,.2f}</td>
@@ -69,10 +78,7 @@ def generate_output_pdf(df, total_dr, total_cr):
                 </tr>
             </table>
         </div>
-
         {table_html}
-        
-        <p style='text-align: right; font-size: 7pt;'>Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}</p>
     </body>
     </html>
     """
@@ -87,49 +93,64 @@ if uploaded_file:
     if not df.empty:
         st.sidebar.header("🎯 Advanced Filters")
         
-        # 1. Type Filter (Debit/Credit/Both)
-        type_col = next((c for c in df.columns if any(x in c.lower() for x in ['type', 'dr/cr', 'status', 'description'])), None)
-        # Note: Often Debit/Credit is determined by which column has a value.
+        # 1. DATE FILTER (Now visible at the top)
+        date_col = next((c for c in df.columns if 'date' in c.lower()), None)
+        if date_col:
+            df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
+            df = df.dropna(subset=[date_col])
+            st.sidebar.subheader("📅 Date Range")
+            start_date = st.sidebar.date_input("From", df[date_col].min())
+            end_date = st.sidebar.date_input("To", df[date_col].max())
+            df = df[(df[date_col] >= pd.to_datetime(start_date)) & (df[date_col] <= pd.to_datetime(end_date))]
+
+        # 2. TYPE FILTER
+        st.sidebar.subheader("🔄 Transaction Type")
+        tran_type = st.sidebar.radio("Show:", ["Both", "Debit Only", "Credit Only"])
+        
+        # 3. AMOUNT FILTER (Typed inputs)
+        st.sidebar.subheader("💰 Amount Range")
+        amt_col = next((c for c in df.columns if any(x in c.lower() for x in ['amount', 'balance', 'value'])), None)
         dr_col = next((c for c in df.columns if 'debit' in c.lower()), None)
         cr_col = next((c for c in df.columns if 'credit' in c.lower()), None)
+        target_amt_col = amt_col or dr_col or cr_col
         
-        tran_type = st.sidebar.radio("Transaction Type", ["Both", "Debit Only", "Credit Only"])
-        
-        # 2. Particulars Multi-word Search
+        def clean_num(v):
+            if pd.isna(v) or str(v).strip() == '': return 0.0
+            num_str = re.sub(r'[^\d.]', '', str(v))
+            return float(num_str) if num_str else 0.0
+
+        if target_amt_col:
+            df['temp_amt'] = df[target_amt_col].apply(clean_num)
+            col1, col2 = st.sidebar.columns(2)
+            min_input = col1.number_input("Min", value=0.0)
+            max_input = col2.number_input("Max", value=float(df['temp_amt'].max()) if not df.empty else 100000.0)
+            df = df[(df['temp_amt'] >= min_input) & (df['temp_amt'] <= max_input)]
+
+        # 4. BRANCH FILTER
+        branch_col = next((c for c in df.columns if 'branch' in c.lower()), None)
+        if branch_col:
+            st.sidebar.subheader("🏢 Branch")
+            branches = sorted(df[branch_col].unique().tolist())
+            sel_branches = st.sidebar.multiselect("Select Branches", branches)
+            if sel_branches:
+                df = df[df[branch_col].isin(sel_branches)]
+
+        # 5. PARTICULARS FILTER (Multiple keywords)
         particulars_col = next((c for c in df.columns if any(x in c.lower() for x in ['particulars', 'description', 'details'])), None)
         if particulars_col:
-            keywords = st.sidebar.text_input("Search Particulars (use commas for multiple words)", "").split(',')
-            keywords = [k.strip() for k in keywords if k.strip()]
+            st.sidebar.subheader("🔍 Particulars")
+            kw_input = st.sidebar.text_input("Search (comma separated)", "")
+            keywords = [k.strip() for k in kw_input.split(',') if k.strip()]
             if keywords:
                 pattern = '|'.join([re.escape(k) for k in keywords])
                 df = df[df[particulars_col].astype(str).str.contains(pattern, case=False, na=False)]
 
-        # 3. Manual Amount Input (No Slider)
-        amt_col = next((c for c in df.columns if any(x in c.lower() for x in ['amount', 'balance', 'value'])), None)
-        # Fallback to checking Dr/Cr columns if specific Amount column is missing
-        target_amt_col = amt_col or dr_col or cr_col
-        
-        if target_amt_col:
-            # Helper to clean numbers
-            def clean_num(v):
-                if pd.isna(v) or v == '': return 0.0
-                return float(re.sub(r'[^\d.]', '', str(v))) if re.sub(r'[^\d.]', '', str(v)) else 0.0
-
-            df['temp_amt'] = df[target_amt_col].apply(clean_num)
-            
-            col1, col2 = st.sidebar.columns(2)
-            min_input = col1.number_input("Min Amount", value=0.0)
-            max_input = col2.number_input("Max Amount", value=float(df['temp_amt'].max()) if not df.empty else 10000.0)
-            
-            df = df[(df['temp_amt'] >= min_input) & (df['temp_amt'] <= max_input)]
-
-        # Apply Dr/Cr logic after filtering
+        # Post-filter Dr/Cr logic
         if dr_col and cr_col:
             if tran_type == "Debit Only":
                 df = df[df[dr_col].apply(clean_num) > 0]
             elif tran_type == "Credit Only":
                 df = df[df[cr_col].apply(clean_num) > 0]
-            
             total_dr = df[dr_col].apply(clean_num).sum()
             total_cr = df[cr_col].apply(clean_num).sum()
         else:
@@ -139,8 +160,5 @@ if uploaded_file:
         st.dataframe(df.drop(columns=['temp_amt'], errors='ignore'), width="stretch")
         
         if st.button("🚀 Export to PDF with Summary"):
-            with st.spinner("Generating PDF..."):
-                pdf_bytes = generate_output_pdf(df.drop(columns=['temp_amt'], errors='ignore'), total_dr, total_cr)
-                st.download_button("📥 Download PDF Report", pdf_bytes, "summary_report.pdf", "application/pdf")
-    else:
-        st.error("No data extracted.")
+            pdf_bytes = generate_output_pdf(df.drop(columns=['temp_amt'], errors='ignore'), total_dr, total_cr)
+            st.download_button("📥 Download PDF Report", pdf_bytes, "summary_report.pdf", "application/pdf")
