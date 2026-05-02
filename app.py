@@ -113,13 +113,27 @@ if uploaded_file:
             if sel_types:
                 df = df[df[type_col].isin(sel_types)]
 
-        # 4. Amount Filter
+                # 4. Amount Filter (Enhanced with NaN safety)
         amt_col = next((c for c in df.columns if any(x in c.lower() for x in ['amount', 'balance', 'debit', 'credit'])), None)
         if amt_col:
-            df[amt_col] = pd.to_numeric(df[amt_col].astype(str).replace(r'[^\d.]', '', regex=True), errors='coerce')
-            min_v, max_v = float(df[amt_col].min()), float(df[amt_col].max())
-            amt_range = st.sidebar.slider("Amount Range", min_v, max_v, (min_v, max_v))
-            df = df[(df[amt_col] >= amt_range[0]) & (df[amt_col] <= amt_range[1])]
+            # Clean numeric data: remove commas, currency symbols, and spaces
+            clean_amt = pd.to_numeric(df[amt_col].astype(str).replace(r'[^\d.]', '', regex=True), errors='coerce')
+            
+            # Check if we actually have valid numbers to show a slider
+            if not clean_amt.dropna().empty:
+                min_v = float(clean_amt.min())
+                max_v = float(clean_amt.max())
+                
+                # Validation: Ensure min and max aren't the same and aren't NaN
+                if min_v < max_v:
+                    amt_range = st.sidebar.slider("Amount Range", min_v, max_v, (min_v, max_v))
+                    # Apply the filter back to the dataframe
+                    df = df[(pd.to_numeric(df[amt_col].astype(str).replace(r'[^\d.]', '', regex=True), errors='coerce') >= amt_range[0]) & 
+                            (pd.to_numeric(df[amt_col].astype(str).replace(r'[^\d.]', '', regex=True), errors='coerce') <= amt_range[1])]
+                else:
+                    st.sidebar.info("Amount range too small for slider.")
+            else:
+                st.sidebar.warning("Could not identify numeric amounts for filtering.")
 
         # 5. Search
         search = st.sidebar.text_input("Particulars Search")
