@@ -12,16 +12,13 @@ st.set_page_config(page_title="STMNT Processor Pro", layout="wide")
 st.markdown("""
     <style>
     .main { background-color: #f8fafc; }
-    /* Sidebar Styling: Navy Background with White Text */
     [data-testid="stSidebar"] {
         background-color: #1e293b !important;
         color: white !important;
     }
-    /* Ensure all text in sidebar is white */
     [data-testid="stSidebar"] p, [data-testid="stSidebar"] label, [data-testid="stSidebar"] span {
         color: white !important;
     }
-    /* Input box styling for visibility */
     .stTextInput input, .stNumberInput input {
         background-color: #f1f5f9 !important;
         color: #0f172a !important;
@@ -34,6 +31,11 @@ st.markdown("""
 st.title("📑 STMNT: Advanced Transaction Processor")
 
 uploaded_file = st.file_uploader("Upload Bank Statement (PDF)", type=['pdf'])
+
+def clean_num(v):
+    if pd.isna(v) or str(v).strip() == '': return 0.0
+    num_str = re.sub(r'[^\d.]', '', str(v))
+    return float(num_str) if num_str else 0.0
 
 def extract_pdf_data(file):
     all_data = []
@@ -60,7 +62,7 @@ def generate_output_pdf(df, total_dr, total_cr):
             @page {{ size: A4 landscape; margin: 10mm; }}
             body {{ font-family: 'Helvetica', sans-serif; font-size: 8pt; color: #333; }}
             h2 {{ color: #1e3a8a; text-align: center; border-bottom: 2px solid #1e3a8a; }}
-            .summary-box {{ margin: 20px 0; padding: 10px; border: 1px solid #1e3a8a; background: #f8fafc; border-radius: 5px; }}
+            .summary-box {{ margin: 20px 0; padding: 15px; border: 2px solid #1e3a8a; background: #f0f7ff; border-radius: 8px; }}
             .report-table {{ width: 100%; border-collapse: collapse; margin-top: 10px; }}
             .report-table th {{ background-color: #1e3a8a; color: white; padding: 6px; text-align: left; }}
             .report-table td {{ border-bottom: 1px solid #cbd5e1; padding: 6px; }}
@@ -70,7 +72,7 @@ def generate_output_pdf(df, total_dr, total_cr):
     <body>
         <h2>Transaction Separation Report</h2>
         <div class="summary-box">
-            <table style="width: 100%;">
+            <table style="width: 100%; font-size: 10pt;">
                 <tr>
                     <td><strong>Total Debit:</strong> {total_dr:,.2f}</td>
                     <td><strong>Total Credit:</strong> {total_cr:,.2f}</td>
@@ -93,7 +95,7 @@ if uploaded_file:
     if not df.empty:
         st.sidebar.header("🎯 Advanced Filters")
         
-        # 1. DATE FILTER (Now visible at the top)
+        # 1. Date Range
         date_col = next((c for c in df.columns if 'date' in c.lower()), None)
         if date_col:
             df[date_col] = pd.to_datetime(df[date_col], errors='coerce')
@@ -103,30 +105,25 @@ if uploaded_file:
             end_date = st.sidebar.date_input("To", df[date_col].max())
             df = df[(df[date_col] >= pd.to_datetime(start_date)) & (df[date_col] <= pd.to_datetime(end_date))]
 
-        # 2. TYPE FILTER
+        # 2. Transaction Type
         st.sidebar.subheader("🔄 Transaction Type")
         tran_type = st.sidebar.radio("Show:", ["Both", "Debit Only", "Credit Only"])
         
-        # 3. AMOUNT FILTER (Typed inputs)
+        # 3. Amount Range
         st.sidebar.subheader("💰 Amount Range")
         amt_col = next((c for c in df.columns if any(x in c.lower() for x in ['amount', 'balance', 'value'])), None)
         dr_col = next((c for c in df.columns if 'debit' in c.lower()), None)
         cr_col = next((c for c in df.columns if 'credit' in c.lower()), None)
         target_amt_col = amt_col or dr_col or cr_col
         
-        def clean_num(v):
-            if pd.isna(v) or str(v).strip() == '': return 0.0
-            num_str = re.sub(r'[^\d.]', '', str(v))
-            return float(num_str) if num_str else 0.0
-
         if target_amt_col:
             df['temp_amt'] = df[target_amt_col].apply(clean_num)
             col1, col2 = st.sidebar.columns(2)
             min_input = col1.number_input("Min", value=0.0)
-            max_input = col2.number_input("Max", value=float(df['temp_amt'].max()) if not df.empty else 100000.0)
+            max_input = col2.number_input("Max", value=float(df['temp_amt'].max()) if not df.empty else 1000000.0)
             df = df[(df['temp_amt'] >= min_input) & (df['temp_amt'] <= max_input)]
 
-        # 4. BRANCH FILTER
+        # 4. Branch Filter
         branch_col = next((c for c in df.columns if 'branch' in c.lower()), None)
         if branch_col:
             st.sidebar.subheader("🏢 Branch")
@@ -135,22 +132,23 @@ if uploaded_file:
             if sel_branches:
                 df = df[df[branch_col].isin(sel_branches)]
 
-        # 5. PARTICULARS FILTER (Multiple keywords)
-        particulars_col = next((c for c in df.columns if any(x in c.lower() for x in ['particulars', 'description', 'details'])), None)
+        # 5. Particulars Filter (Multi-keyword Search)
+        particulars_col = next((c for c in df.columns if any(x in c.lower() for x in ['transaction', 'particulars', 'description', 'details'])), None)
         if particulars_col:
-            st.sidebar.subheader("🔍 Particulars")
-            kw_input = st.sidebar.text_input("Search (comma separated)", "")
+            st.sidebar.subheader("🔍 Particulars Search")
+            kw_input = st.sidebar.text_input("Keywords (separate by comma)", "")
             keywords = [k.strip() for k in kw_input.split(',') if k.strip()]
             if keywords:
                 pattern = '|'.join([re.escape(k) for k in keywords])
                 df = df[df[particulars_col].astype(str).str.contains(pattern, case=False, na=False)]
 
-        # Post-filter Dr/Cr logic
+        # Final Totals Calculation
         if dr_col and cr_col:
             if tran_type == "Debit Only":
                 df = df[df[dr_col].apply(clean_num) > 0]
             elif tran_type == "Credit Only":
                 df = df[df[cr_col].apply(clean_num) > 0]
+            
             total_dr = df[dr_col].apply(clean_num).sum()
             total_cr = df[cr_col].apply(clean_num).sum()
         else:
